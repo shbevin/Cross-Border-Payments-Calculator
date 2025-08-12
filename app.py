@@ -4,7 +4,6 @@ from typing import List, Dict, Optional
 from decimal import Decimal, ROUND_HALF_UP
 
 import streamlit as st
-from pydantic import BaseModel, Field, validator
 
 # ---------- Data models ----------
 @dataclass
@@ -93,15 +92,6 @@ MID_RATES = {
 def mid_rate(src_ccy: str, dst_ccy: str) -> Optional[float]:
     return MID_RATES.get((src_ccy, dst_ccy))
 
-# ---------- Validation ----------
-class InputModel(BaseModel):
-    amount: float = Field(gt=0, description="Amount to send in source currency")
-    @validator("amount")
-    def validate_amount(cls, v):
-        if v <= 0:
-            raise ValueError("Amount must be > 0")
-        return v
-
 # ---------- Helpers ----------
 def fmt_money(x: float, ccy: str) -> str:
     q = Decimal(str(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -152,7 +142,6 @@ st.set_page_config(page_title="Cross-Border Payment Fee Calculator", page_icon="
 st.title("💸 Cross-Border Payment Fee Calculator")
 st.caption("Mock, for learning/demo purposes. Not financial advice. Rates are illustrative.")
 
-# Corridor pickers
 srcs = sorted({c.src for c in CORRIDORS})
 src_choice = st.selectbox("From (country)", srcs, index=0)
 dsts = sorted({c.dst for c in CORRIDORS if c.src == src_choice})
@@ -165,6 +154,12 @@ corridor = next(c for c in CORRIDORS if c.src == src_choice and c.dst == dst_cho
 st.write(f"**Currency:** {corridor.currency_src} → {corridor.currency_dst}")
 
 amount = st.number_input(f"Send amount ({corridor.currency_src})", min_value=10.0, step=10.0, value=1000.0)
+
+# Manual validation (no Pydantic)
+if amount <= 0:
+    st.error("Amount must be greater than 0")
+    st.stop()
+
 rails = [r.name for r in corridor.rails]
 rail_choice = st.selectbox("Payment rail", rails)
 rail = next(r for r in corridor.rails if r.name == rail_choice)
@@ -173,12 +168,9 @@ limits = rail.send_limit_min, rail.send_limit_max
 if amount < limits[0] or amount > limits[1]:
     st.warning(f"Typical limits for {rail.name}: {limits[0]:.0f}–{limits[1]:.0f} {corridor.currency_src}")
 
-# Compute
 try:
-    InputModel(amount=amount)
     quote = compute_quote(amount, rail, corridor.currency_src, corridor.currency_dst)
 
-    # Summary
     st.subheader("Quote")
     col1, col2 = st.columns(2)
     with col1:
@@ -191,7 +183,6 @@ try:
         if quote["received_dst"] is not None:
             st.metric("Recipient receives", fmt_money(quote["received_dst"], corridor.currency_dst))
 
-    # Rates + ETA
     if quote["rate_mid"]:
         st.info(
             f"Mid-market rate: **{quote['rate_mid']:.4f}** | Customer rate: **{quote['rate_customer']:.4f}** "
@@ -200,7 +191,6 @@ try:
     else:
         st.info(f"No FX conversion required | Est. delivery: **~{quote['est_delivery_hours']}h**")
 
-    # Breakdown table
     st.markdown("**Cost Breakdown (Source Currency)**")
     st.table({
         "Component": ["Fixed fee", "Variable fee", "FX spread cost (approx)"],
